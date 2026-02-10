@@ -1,1 +1,6 @@
-*.pyc\n__pycache__/\ntodo.db
+*.pyc
+__pycache__/
+todo.db
+*.egg-info/
+build/
+dist/

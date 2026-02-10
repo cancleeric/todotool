@@ -4,7 +4,19 @@ import os
 import hashlib
 import secrets
 
+from datetime import date, datetime, timedelta
+
 DB_PATH = os.path.join(os.path.dirname(__file__), 'todo.db')
+
+
+def normalize_date(d):
+    """Normalize a date string to YYYY-MM-DD format."""
+    if not d:
+        return d
+    try:
+        return datetime.strptime(d.strip(), '%Y-%m-%d').strftime('%Y-%m-%d')
+    except ValueError:
+        return d
 
 
 def get_conn(db_path=None):
@@ -86,6 +98,7 @@ def verify_user(conn, username, password):
 # --- Todos ---
 
 def add_todo(conn, title, priority='medium', due_date=None, note='', created_by='', tags=None):
+    due_date = normalize_date(due_date)
     cur = conn.execute(
         "INSERT INTO todos (title, priority, due_date, note, created_by) VALUES (?, ?, ?, ?, ?)",
         (title, priority, due_date, note, created_by))
@@ -111,7 +124,7 @@ def edit_todo(conn, todo_id, title=None, priority=None, due_date=None, note=None
         params.append(priority)
     if due_date is not None:
         updates.append("due_date = ?")
-        params.append(due_date if due_date != '' else None)
+        params.append(normalize_date(due_date) if due_date != '' else None)
     if note is not None:
         updates.append("note = ?")
         params.append(note)
@@ -176,9 +189,8 @@ def list_todos(conn, status=None, tag=None, priority=None, due_date=None, limit=
 
 
 def list_due_within(conn, days):
-    from datetime import datetime, timedelta
-    today = datetime.now().strftime('%Y-%m-%d')
-    end = (datetime.now() + timedelta(days=days)).strftime('%Y-%m-%d')
+    today = date.today().strftime('%Y-%m-%d')
+    end = (date.today() + timedelta(days=days)).strftime('%Y-%m-%d')
     return conn.execute(
         "SELECT * FROM todos WHERE status = 'pending' AND due_date IS NOT NULL AND due_date >= ? AND due_date <= ? ORDER BY due_date ASC",
         (today, end)).fetchall()
