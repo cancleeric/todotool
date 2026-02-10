@@ -121,7 +121,7 @@ def cmd_done(args):
     if not todo:
         print(f"❌ 找不到待辦事項 [{args.id}]")
         return
-    db.mark_done(conn, args.id)
+    db.mark_done(conn, args.id, changed_by=SESSION_USER or '')
     print(f"✅ [{args.id}] {todo['title']} — 已完成！")
 
 
@@ -136,12 +136,12 @@ def cmd_edit(args):
         print(f"❌ 找不到待辦事項 [{args.id}]")
         return
     db.edit_todo(conn, args.id, title=args.title, priority=args.priority,
-                 due_date=args.due, note=args.note, tags=args.tag)
+                 due_date=args.due, note=args.note, tags=args.tag, changed_by=SESSION_USER or '')
     print(f"📝 [{args.id}] 已更新")
 
 
-def cmd_delete(args):
-    """Delete a todo."""
+def cmd_history(args):
+    """Show edit history for a todo."""
     conn = db.init_db()
     if not require_auth(conn, args):
         return
@@ -150,8 +150,16 @@ def cmd_delete(args):
     if not todo:
         print(f"❌ 找不到待辦事項 [{args.id}]")
         return
-    db.delete_todo(conn, args.id)
-    print(f"🗑️ [{args.id}] {todo['title']} — 已刪除")
+
+    history = db.get_history(conn, args.id)
+    if not history:
+        print(f"📋 [{args.id}] {todo['title']} — 沒有修改紀錄")
+        return
+
+    print(f"📋 [{args.id}] {todo['title']} — 修改紀錄：")
+    for h in history:
+        by = f"  (by {h['changed_by']})" if h['changed_by'] else ''
+        print(f"  {h['changed_at']}  {h['field']}: {h['old_value']} → {h['new_value']}{by}")
 
 
 def cmd_due(args):
@@ -194,21 +202,18 @@ def cmd_tag(args):
 def main():
     parser = argparse.ArgumentParser(prog='todotool', description='HurricaneSoft 待辦事項管理工具')
     parser.add_argument('--version', action='version', version=f'todotool v{__version__}')
-
-    # Auth args as a parent parser so subcommands inherit them
-    auth_parent = argparse.ArgumentParser(add_help=False)
-    auth_parent.add_argument('--user', help='登入帳號')
-    auth_parent.add_argument('--password', help='登入密碼')
+    parser.add_argument('--user', help='登入帳號')
+    parser.add_argument('--password', help='登入密碼')
 
     sub = parser.add_subparsers(dest='command')
 
     # init
-    p = sub.add_parser('init', help='初始化資料庫', parents=[auth_parent])
+    p = sub.add_parser('init', help='初始化資料庫')
     p.add_argument('--admin-user', help='管理員帳號')
     p.add_argument('--admin-password', help='管理員密碼')
 
     # add
-    p = sub.add_parser('add', help='新增待辦事項', parents=[auth_parent])
+    p = sub.add_parser('add', help='新增待辦事項')
     p.add_argument('title', help='標題')
     p.add_argument('--priority', choices=['high', 'medium', 'low'], default='medium', help='優先度')
     p.add_argument('--due', help='到期日 (YYYY-MM-DD)')
@@ -216,7 +221,7 @@ def main():
     p.add_argument('--tag', action='append', help='標籤（可多次使用）')
 
     # list
-    p = sub.add_parser('list', help='列出待辦事項', parents=[auth_parent])
+    p = sub.add_parser('list', help='列出待辦事項')
     p.add_argument('--status', choices=['pending', 'done'], help='狀態篩選')
     p.add_argument('--tag', help='標籤篩選')
     p.add_argument('--priority', choices=['high', 'medium', 'low'], help='優先度篩選')
@@ -224,11 +229,11 @@ def main():
     p.add_argument('--limit', type=int, default=50)
 
     # done
-    p = sub.add_parser('done', help='標記完成', parents=[auth_parent])
+    p = sub.add_parser('done', help='標記完成')
     p.add_argument('id', type=int, help='待辦事項 ID')
 
     # edit
-    p = sub.add_parser('edit', help='編輯待辦事項', parents=[auth_parent])
+    p = sub.add_parser('edit', help='編輯待辦事項')
     p.add_argument('id', type=int, help='待辦事項 ID')
     p.add_argument('--title', help='新標題')
     p.add_argument('--priority', choices=['high', 'medium', 'low'], help='新優先度')
@@ -236,16 +241,16 @@ def main():
     p.add_argument('--note', help='新備註')
     p.add_argument('--tag', action='append', help='新標籤（可多次使用，取代現有標籤）')
 
-    # delete
-    p = sub.add_parser('delete', help='刪除待辦事項', parents=[auth_parent])
+    # history
+    p = sub.add_parser('history', help='查看修改紀錄')
     p.add_argument('id', type=int, help='待辦事項 ID')
 
     # due
-    p = sub.add_parser('due', help='查詢即將到期事項', parents=[auth_parent])
+    p = sub.add_parser('due', help='查詢即將到期事項')
     p.add_argument('--days', type=int, default=7, help='天數（預設 7）')
 
     # tag
-    p = sub.add_parser('tag', help='標籤管理', parents=[auth_parent])
+    p = sub.add_parser('tag', help='標籤管理')
     p.add_argument('action', choices=['list'], help='動作')
 
     args = parser.parse_args()
@@ -255,7 +260,7 @@ def main():
 
     cmds = {
         'init': cmd_init, 'add': cmd_add, 'list': cmd_list,
-        'done': cmd_done, 'edit': cmd_edit, 'delete': cmd_delete,
+        'done': cmd_done, 'edit': cmd_edit, 'history': cmd_history,
         'due': cmd_due, 'tag': cmd_tag,
     }
     cmds[args.command](args)
