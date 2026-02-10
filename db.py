@@ -148,9 +148,7 @@ def mark_done(conn, todo_id):
     conn.commit()
 
 
-def delete_todo(conn, todo_id):
-    conn.execute("DELETE FROM todos WHERE id = ?", (todo_id,))
-    conn.commit()
+# delete_todo removed per issue #5 — todos cannot be deleted, only marked done
 
 
 def get_todo(conn, todo_id):

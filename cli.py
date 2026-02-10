@@ -139,18 +139,7 @@ def cmd_edit(args):
     print(f"📝 [{args.id}] 已更新")
 
 
-def cmd_delete(args):
-    """Delete a todo."""
-    conn = db.init_db()
-    if not require_auth(conn, args):
-        return
-
-    todo = db.get_todo(conn, args.id)
-    if not todo:
-        print(f"❌ 找不到待辦事項 [{args.id}]")
-        return
-    db.delete_todo(conn, args.id)
-    print(f"🗑️ [{args.id}] {todo['title']} — 已刪除")
+# delete command removed per issue #5 — todos cannot be deleted, only marked done
 
 
 def cmd_due(args):
@@ -234,9 +223,7 @@ def main():
     p.add_argument('--note', help='新備註')
     p.add_argument('--tag', action='append', help='新標籤（可多次使用，取代現有標籤）')
 
-    # delete
-    p = sub.add_parser('delete', help='刪除待辦事項', parents=[auth_parent])
-    p.add_argument('id', type=int, help='待辦事項 ID')
+    # delete removed per issue #5
 
     # due
     p = sub.add_parser('due', help='查詢即將到期事項', parents=[auth_parent])
@@ -253,7 +240,7 @@ def main():
 
     cmds = {
         'init': cmd_init, 'add': cmd_add, 'list': cmd_list,
-        'done': cmd_done, 'edit': cmd_edit, 'delete': cmd_delete,
+        'done': cmd_done, 'edit': cmd_edit,
         'due': cmd_due, 'tag': cmd_tag,
     }
     cmds[args.command](args)
