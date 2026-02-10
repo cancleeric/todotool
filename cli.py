@@ -7,6 +7,7 @@ import getpass
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from todotool import db
+from todotool import __version__
 
 
 SESSION_USER = None
@@ -192,6 +193,7 @@ def cmd_tag(args):
 
 def main():
     parser = argparse.ArgumentParser(prog='todotool', description='HurricaneSoft 待辦事項管理工具')
+    parser.add_argument('--version', action='version', version=f'todotool v{__version__}')
 
     # Auth args as a parent parser so subcommands inherit them
     auth_parent = argparse.ArgumentParser(add_help=False)
