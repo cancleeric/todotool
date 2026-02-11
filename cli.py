@@ -17,10 +17,21 @@ STATUS_ICON = {'pending': '📝', 'done': '✅'}
 
 
 def require_auth(conn, args=None):
-    """Check if any user exists, if so require login."""
+    """Check if any user exists, if so require login. Supports LIDS."""
     global SESSION_USER
     if SESSION_USER:
         return True
+
+    # Try LIDS auth first
+    try:
+        from hurricanesoft_auth.wrapper import try_lids_auth
+        lids_user = try_lids_auth(args)
+        if lids_user:
+            SESSION_USER = lids_user
+            return True
+    except ImportError:
+        pass
+
     username = getattr(args, 'user', None) or os.environ.get('TODO_USER', '')
     password = getattr(args, 'password', None) or os.environ.get('TODO_PASSWORD', '')
     users = conn.execute("SELECT COUNT(*) as c FROM users").fetchone()['c']
@@ -204,6 +215,7 @@ def main():
     parser.add_argument('--version', action='version', version=f'todotool v{__version__}')
     parser.add_argument('--user', help='登入帳號')
     parser.add_argument('--password', help='登入密碼')
+    parser.add_argument('--lids', action='store_true', help='使用 LIDS 認證')
 
     sub = parser.add_subparsers(dest='command')
 
