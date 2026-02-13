@@ -1,10 +1,14 @@
 """PostgreSQL database layer for TodoTool."""
+import os
+import hashlib
+import secrets
+from datetime import date, datetime, timedelta
+
 try:
     import psycopg2
     import psycopg2.extras
 except ImportError:
-    raise RuntimeError("psycopg2 not installed")
-import os
+    raise RuntimeError("psycopg2 not installed. pip install psycopg2-binary")
 
 PG_CONFIG = {
     'host': os.environ.get('HS_PG_HOST', 'host.docker.internal'),
@@ -14,6 +18,7 @@ PG_CONFIG = {
     'password': os.environ.get('HS_PG_PASSWORD', ''),
 }
 
+
 def _pg_connect(config=None):
     cfg = config or PG_CONFIG
     conn = psycopg2.connect(
@@ -22,17 +27,10 @@ def _pg_connect(config=None):
         database=cfg.get('pg_database', cfg.get('database', '')),
         user=cfg.get('pg_user', cfg.get('user', '')),
         password=cfg.get('pg_password', cfg.get('password', '')),
+        cursor_factory=psycopg2.extras.RealDictCursor,
     )
     conn.autocommit = True
     return conn
-
-
-import os
-import hashlib
-import secrets
-
-from datetime import date, datetime, timedelta
-
 
 
 def normalize_date(d):
@@ -45,62 +43,25 @@ def normalize_date(d):
         return d
 
 
-def get_conn(db_path=None):
-    conn = _pg_connect(config)
-    
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    return conn
+def get_conn(config=None):
+    """Get a PostgreSQL connection (no SQLite PRAGMAs)."""
+    return _pg_connect(config)
 
 
 def init_db(config=None):
-    conn = get_conn(db_path)
-    conn.executescript("""
-        CREATE TABLE IF NOT EXISTS todo_users (
-            id SERIAL PRIMARY KEY,
-            username TEXT UNIQUE NOT NULL,
-            password_hash TEXT NOT NULL,
-            salt TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-
-        CREATE TABLE IF NOT EXISTS todo_todos (
-            id SERIAL PRIMARY KEY,
-            title TEXT NOT NULL,
-            status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'done')),
-            priority TEXT NOT NULL DEFAULT 'medium' CHECK(priority IN ('high', 'medium', 'low')),
-            due_date TEXT,
-            note TEXT DEFAULT '',
-            created_by TEXT DEFAULT '',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            completed_at DATETIME
-        );
-
-        CREATE TABLE IF NOT EXISTS todo_tags (
-            todo_id INTEGER NOT NULL REFERENCES todo_todos(id) ON DELETE CASCADE,
-            tag TEXT NOT NULL,
-            UNIQUE(todo_id, tag)
-        );
-
-        CREATE TABLE IF NOT EXISTS todo_history (
-            id SERIAL PRIMARY KEY,
-            todo_id INTEGER NOT NULL,
-            field TEXT NOT NULL,
-            old_value TEXT,
-            new_value TEXT,
-            changed_by TEXT DEFAULT '',
-            changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (todo_id) REFERENCES todo_todos(id)
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_todos_status ON todo_todos(status);
-        CREATE INDEX IF NOT EXISTS idx_todos_priority ON todo_todos(priority);
-        CREATE INDEX IF NOT EXISTS idx_todos_due_date ON todo_todos(due_date);
-        CREATE INDEX IF NOT EXISTS idx_todo_tags_tag ON todo_tags(tag);
-        CREATE INDEX IF NOT EXISTS idx_todo_history_todo ON todo_history(todo_id);
-    """)
-    conn.commit()
+    """Connect and verify required tables exist. No DDL — schema managed by DBA."""
+    conn = get_conn(config)
+    cur = conn.cursor()
+    required_tables = ['todo_users', 'todo_todos', 'todo_tags', 'todo_history']
+    for table in required_tables:
+        cur.execute(
+            "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = %s)",
+            (table,)
+        )
+        if not cur.fetchone()['exists']:
+            raise RuntimeError(
+                f"Table '{table}' not found. Please ask DBA Arianny to create it."
+            )
     return conn
 
 
@@ -115,18 +76,20 @@ def hash_password(password, salt=None):
 
 def create_user(conn, username, password):
     pw_hash, salt = hash_password(password)
+    cur = conn.cursor()
     try:
-        conn.execute("INSERT INTO todo_users (username, password_hash, salt) VALUES (%s, %s, %s)",
-                     (username, pw_hash, salt))
-        conn.commit()
+        cur.execute("INSERT INTO todo_users (username, password_hash, salt) VALUES (%s, %s, %s)",
+                    (username, pw_hash, salt))
         return True
     except psycopg2.IntegrityError:
+        conn.rollback()
         return False
 
 
 def verify_user(conn, username, password):
-    row = conn.execute("SELECT password_hash, salt FROM todo_users WHERE username = %s",
-                       (username,)).fetchone()
+    cur = conn.cursor()
+    cur.execute("SELECT password_hash, salt FROM todo_users WHERE username = %s", (username,))
+    row = cur.fetchone()
     if not row:
         return False
     pw_hash, _ = hash_password(password, row['salt'])
@@ -137,25 +100,26 @@ def verify_user(conn, username, password):
 
 def add_todo(conn, title, priority='medium', due_date=None, note='', created_by='', tags=None):
     due_date = normalize_date(due_date)
-    cur = conn.execute(
-        "INSERT INTO todo_todos (title, priority, due_date, note, created_by) VALUES (%s, %s, %s, %s, %s)",
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO todo_todos (title, priority, due_date, note, created_by) VALUES (%s, %s, %s, %s, %s) RETURNING id",
         (title, priority, due_date, note, created_by))
-    todo_id = cur.lastrowid
+    todo_id = cur.fetchone()['id']
     if tags:
         for tag in tags:
             try:
-                conn.execute("INSERT INTO todo_tags (todo_id, tag) VALUES (%s, %s)", (todo_id, tag))
+                cur.execute("INSERT INTO todo_tags (todo_id, tag) VALUES (%s, %s)", (todo_id, tag))
             except psycopg2.IntegrityError:
-                pass
-    conn.commit()
+                conn.rollback()
     return todo_id
 
 
 def _log_change(conn, todo_id, field, old_value, new_value, changed_by=''):
     if str(old_value) != str(new_value):
-        conn.execute(
+        cur = conn.cursor()
+        cur.execute(
             "INSERT INTO todo_history (todo_id, field, old_value, new_value, changed_by) VALUES (%s, %s, %s, %s, %s)",
-            (todo_id, field, str(old_value) if old_value is not None else '', 
+            (todo_id, field, str(old_value) if old_value is not None else '',
              str(new_value) if new_value is not None else '', changed_by))
 
 
@@ -163,6 +127,7 @@ def edit_todo(conn, todo_id, title=None, priority=None, due_date=None, note=None
     old = get_todo(conn, todo_id)
     if not old:
         return
+    cur = conn.cursor()
     updates = []
     params = []
     if title is not None and title != old['title']:
@@ -175,8 +140,8 @@ def edit_todo(conn, todo_id, title=None, priority=None, due_date=None, note=None
         params.append(priority)
     if due_date is not None:
         new_due = normalize_date(due_date) if due_date != '' else None
-        if new_due != old['due_date']:
-            _log_change(conn, todo_id, 'due_date', old['due_date'], new_due, changed_by)
+        if new_due != old.get('due_date'):
+            _log_change(conn, todo_id, 'due_date', old.get('due_date'), new_due, changed_by)
             updates.append("due_date = %s")
             params.append(new_due)
     if note is not None and note != old['note']:
@@ -186,43 +151,46 @@ def edit_todo(conn, todo_id, title=None, priority=None, due_date=None, note=None
     if updates:
         updates.append("updated_at = CURRENT_TIMESTAMP")
         params.append(todo_id)
-        conn.execute(f"UPDATE todo_todos SET {', '.join(updates)} WHERE id = %s", params)
+        cur.execute(f"UPDATE todo_todos SET {', '.join(updates)} WHERE id = %s", params)
     if tags is not None:
         old_tags = sorted(get_todo_tags(conn, todo_id))
         new_tags = sorted(tags)
         if old_tags != new_tags:
             _log_change(conn, todo_id, 'tags', ','.join(old_tags), ','.join(new_tags), changed_by)
-            conn.execute("DELETE FROM todo_tags WHERE todo_id = %s", (todo_id,))
+            cur.execute("DELETE FROM todo_tags WHERE todo_id = %s", (todo_id,))
             for tag in tags:
                 try:
-                    conn.execute("INSERT INTO todo_tags (todo_id, tag) VALUES (%s, %s)", (todo_id, tag))
+                    cur.execute("INSERT INTO todo_tags (todo_id, tag) VALUES (%s, %s)", (todo_id, tag))
                 except psycopg2.IntegrityError:
-                    pass
-    conn.commit()
+                    conn.rollback()
 
 
 def mark_done(conn, todo_id, changed_by=''):
     old = get_todo(conn, todo_id)
     if old and old['status'] != 'done':
         _log_change(conn, todo_id, 'status', 'pending', 'done', changed_by)
-    conn.execute("UPDATE todo_todos SET status = 'done', completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = %s",
-                 (todo_id,))
-    conn.commit()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE todo_todos SET status = 'done', completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = %s",
+        (todo_id,))
 
 
 def get_history(conn, todo_id):
-    return conn.execute(
-        "SELECT * FROM todo_history WHERE todo_id = %s ORDER BY changed_at ASC",
-        (todo_id,)).fetchall()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM todo_history WHERE todo_id = %s ORDER BY changed_at ASC", (todo_id,))
+    return cur.fetchall()
 
 
 def get_todo(conn, todo_id):
-    return conn.execute("SELECT * FROM todo_todos WHERE id = %s", (todo_id,)).fetchone()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM todo_todos WHERE id = %s", (todo_id,))
+    return cur.fetchone()
 
 
 def get_todo_tags(conn, todo_id):
-    rows = conn.execute("SELECT tag FROM todo_tags WHERE todo_id = %s", (todo_id,)).fetchall()
-    return [r['tag'] for r in rows]
+    cur = conn.cursor()
+    cur.execute("SELECT tag FROM todo_tags WHERE todo_id = %s", (todo_id,))
+    return [r['tag'] for r in cur.fetchall()]
 
 
 def list_todos(conn, status=None, tag=None, priority=None, due_date=None, limit=50):
@@ -248,16 +216,22 @@ def list_todos(conn, status=None, tag=None, priority=None, due_date=None, limit=
         sql += " WHERE " + " AND ".join(where)
     sql += " ORDER BY t.id ASC LIMIT %s"
     params.append(limit)
-    return conn.execute(sql, params).fetchall()
+    cur = conn.cursor()
+    cur.execute(sql, params)
+    return cur.fetchall()
 
 
 def list_due_within(conn, days):
     today = date.today().strftime('%Y-%m-%d')
     end = (date.today() + timedelta(days=days)).strftime('%Y-%m-%d')
-    return conn.execute(
+    cur = conn.cursor()
+    cur.execute(
         "SELECT * FROM todo_todos WHERE status = 'pending' AND due_date IS NOT NULL AND due_date >= %s AND due_date <= %s ORDER BY due_date ASC",
-        (today, end)).fetchall()
+        (today, end))
+    return cur.fetchall()
 
 
 def list_all_tags(conn):
-    return conn.execute("SELECT tag, COUNT(*) as count FROM todo_tags GROUP BY tag ORDER BY count DESC").fetchall()
+    cur = conn.cursor()
+    cur.execute("SELECT tag, COUNT(*) as count FROM todo_tags GROUP BY tag ORDER BY count DESC")
+    return cur.fetchall()
