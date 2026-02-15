@@ -211,6 +211,12 @@ def cmd_tag(args):
 
 
 def main():
+    # Create a parent parser with common arguments
+    parent_parser = argparse.ArgumentParser(add_help=False)
+    parent_parser.add_argument('--user', help='登入帳號')
+    parent_parser.add_argument('--password', help='登入密碼')
+    parent_parser.add_argument('--lids', action='store_true', help='使用 LIDS 認證')
+
     parser = argparse.ArgumentParser(prog='todotool', description='HurricaneSoft 待辦事項管理工具')
     parser.add_argument('--version', action='version', version=f'todotool v{__version__}')
     parser.add_argument('--user', help='登入帳號')
@@ -220,12 +226,12 @@ def main():
     sub = parser.add_subparsers(dest='command')
 
     # init
-    p = sub.add_parser('init', help='初始化資料庫')
+    p = sub.add_parser('init', help='初始化資料庫', parents=[parent_parser])
     p.add_argument('--admin-user', help='管理員帳號')
     p.add_argument('--admin-password', help='管理員密碼')
 
     # add
-    p = sub.add_parser('add', help='新增待辦事項')
+    p = sub.add_parser('add', help='新增待辦事項', parents=[parent_parser])
     p.add_argument('title', help='標題')
     p.add_argument('--priority', choices=['high', 'medium', 'low'], default='medium', help='優先度')
     p.add_argument('--due', help='到期日 (YYYY-MM-DD)')
@@ -233,7 +239,7 @@ def main():
     p.add_argument('--tag', action='append', help='標籤（可多次使用）')
 
     # list
-    p = sub.add_parser('list', help='列出待辦事項')
+    p = sub.add_parser('list', help='列出待辦事項', parents=[parent_parser])
     p.add_argument('--status', choices=['pending', 'done'], help='狀態篩選')
     p.add_argument('--tag', help='標籤篩選')
     p.add_argument('--priority', choices=['high', 'medium', 'low'], help='優先度篩選')
@@ -241,11 +247,11 @@ def main():
     p.add_argument('--limit', type=int, default=50)
 
     # done
-    p = sub.add_parser('done', help='標記完成')
+    p = sub.add_parser('done', help='標記完成', parents=[parent_parser])
     p.add_argument('id', type=int, help='待辦事項 ID')
 
     # edit
-    p = sub.add_parser('edit', help='編輯待辦事項')
+    p = sub.add_parser('edit', help='編輯待辦事項', parents=[parent_parser])
     p.add_argument('id', type=int, help='待辦事項 ID')
     p.add_argument('--title', help='新標題')
     p.add_argument('--priority', choices=['high', 'medium', 'low'], help='新優先度')
@@ -254,15 +260,15 @@ def main():
     p.add_argument('--tag', action='append', help='新標籤（可多次使用，取代現有標籤）')
 
     # history
-    p = sub.add_parser('history', help='查看修改紀錄')
+    p = sub.add_parser('history', help='查看修改紀錄', parents=[parent_parser])
     p.add_argument('id', type=int, help='待辦事項 ID')
 
     # due
-    p = sub.add_parser('due', help='查詢即將到期事項')
+    p = sub.add_parser('due', help='查詢即將到期事項', parents=[parent_parser])
     p.add_argument('--days', type=int, default=7, help='天數（預設 7）')
 
     # tag
-    p = sub.add_parser('tag', help='標籤管理')
+    p = sub.add_parser('tag', help='標籤管理', parents=[parent_parser])
     p.add_argument('action', choices=['list'], help='動作')
 
     args = parser.parse_args()

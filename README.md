@@ -20,8 +20,10 @@ export TODO_PASSWORD=your_password
 方法二：命令列參數
 
 ```bash
-todotool list --user admin --password your_password
+todotool --user admin --password your_password list
 ```
+
+**注意：** `--user` 和 `--password` 參數必須放在子命令之前。
 
 ## 初始化
 
@@ -49,9 +51,6 @@ todotool done 1
 
 # 編輯
 todotool edit 1 --title "新標題" --priority low
-
-# 刪除
-todotool delete 1
 
 # 查看所有標籤
 todotool tag list
