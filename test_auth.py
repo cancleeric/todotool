@@ -11,7 +11,7 @@ import sys
 
 # Add the current directory to the Python path
 sys.path.insert(0, os.path.dirname(__file__))
-from todotool import db
+import db
 from cli import verify_lids_token, require_auth
 
 
