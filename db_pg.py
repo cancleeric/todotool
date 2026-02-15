@@ -52,7 +52,7 @@ def init_db(config=None):
     """Connect and verify required tables exist. No DDL — schema managed by DBA."""
     conn = get_conn(config)
     cur = conn.cursor()
-    required_tables = ['todo_users', 'todo_todos', 'todo_tags', 'todo_history']
+    required_tables = ['todo_users', 'todo_todos', 'todo_tags', 'audit_log']
     for table in required_tables:
         cur.execute(
             "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = %s)",
@@ -114,13 +114,13 @@ def add_todo(conn, title, priority='medium', due_date=None, note='', created_by=
     return todo_id
 
 
-def _log_change(conn, todo_id, field, old_value, new_value, changed_by=''):
+def _log_change(conn, todo_id, action, old_value, new_value, user=''):
     if str(old_value) != str(new_value):
         cur = conn.cursor()
         cur.execute(
-            "INSERT INTO todo_history (todo_id, field, old_value, new_value, changed_by) VALUES (%s, %s, %s, %s, %s)",
-            (todo_id, field, str(old_value) if old_value is not None else '',
-             str(new_value) if new_value is not None else '', changed_by))
+            "INSERT INTO audit_log (todo_id, action, old_value, new_value, user) VALUES (%s, %s, %s, %s, %s)",
+            (todo_id, action, str(old_value) if old_value is not None else '',
+             str(new_value) if new_value is not None else '', user))
 
 
 def edit_todo(conn, todo_id, title=None, priority=None, due_date=None, note=None, tags=None, changed_by=''):
@@ -131,21 +131,21 @@ def edit_todo(conn, todo_id, title=None, priority=None, due_date=None, note=None
     updates = []
     params = []
     if title is not None and title != old['title']:
-        _log_change(conn, todo_id, 'title', old['title'], title, changed_by)
+        _log_change(conn, todo_id, 'edit_title', old['title'], title, changed_by)
         updates.append("title = %s")
         params.append(title)
     if priority is not None and priority != old['priority']:
-        _log_change(conn, todo_id, 'priority', old['priority'], priority, changed_by)
+        _log_change(conn, todo_id, 'edit_priority', old['priority'], priority, changed_by)
         updates.append("priority = %s")
         params.append(priority)
     if due_date is not None:
         new_due = normalize_date(due_date) if due_date != '' else None
         if new_due != old.get('due_date'):
-            _log_change(conn, todo_id, 'due_date', old.get('due_date'), new_due, changed_by)
+            _log_change(conn, todo_id, 'edit_due_date', old.get('due_date'), new_due, changed_by)
             updates.append("due_date = %s")
             params.append(new_due)
     if note is not None and note != old['note']:
-        _log_change(conn, todo_id, 'note', old['note'], note, changed_by)
+        _log_change(conn, todo_id, 'edit_note', old['note'], note, changed_by)
         updates.append("note = %s")
         params.append(note)
     if updates:
@@ -156,7 +156,7 @@ def edit_todo(conn, todo_id, title=None, priority=None, due_date=None, note=None
         old_tags = sorted(get_todo_tags(conn, todo_id))
         new_tags = sorted(tags)
         if old_tags != new_tags:
-            _log_change(conn, todo_id, 'tags', ','.join(old_tags), ','.join(new_tags), changed_by)
+            _log_change(conn, todo_id, 'edit_tags', ','.join(old_tags), ','.join(new_tags), changed_by)
             cur.execute("DELETE FROM todo_tags WHERE todo_id = %s", (todo_id,))
             for tag in tags:
                 try:
@@ -168,7 +168,7 @@ def edit_todo(conn, todo_id, title=None, priority=None, due_date=None, note=None
 def mark_done(conn, todo_id, changed_by=''):
     old = get_todo(conn, todo_id)
     if old and old['status'] != 'done':
-        _log_change(conn, todo_id, 'status', 'pending', 'done', changed_by)
+        _log_change(conn, todo_id, 'mark_done', 'pending', 'done', changed_by)
     cur = conn.cursor()
     cur.execute(
         "UPDATE todo_todos SET status = 'done', completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = %s",
@@ -177,7 +177,7 @@ def mark_done(conn, todo_id, changed_by=''):
 
 def get_history(conn, todo_id):
     cur = conn.cursor()
-    cur.execute("SELECT * FROM todo_history WHERE todo_id = %s ORDER BY changed_at ASC", (todo_id,))
+    cur.execute("SELECT * FROM audit_log WHERE todo_id = %s ORDER BY timestamp ASC", (todo_id,))
     return cur.fetchall()
 
 

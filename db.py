@@ -57,14 +57,14 @@ def init_db(db_path=None):
             UNIQUE(todo_id, tag)
         );
 
-        CREATE TABLE IF NOT EXISTS todo_history (
+        CREATE TABLE IF NOT EXISTS audit_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             todo_id INTEGER NOT NULL,
-            field TEXT NOT NULL,
+            action TEXT NOT NULL,
             old_value TEXT,
             new_value TEXT,
-            changed_by TEXT DEFAULT '',
-            changed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            user TEXT DEFAULT '',
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (todo_id) REFERENCES todos(id)
         );
 
@@ -72,7 +72,7 @@ def init_db(db_path=None):
         CREATE INDEX IF NOT EXISTS idx_todos_priority ON todos(priority);
         CREATE INDEX IF NOT EXISTS idx_todos_due_date ON todos(due_date);
         CREATE INDEX IF NOT EXISTS idx_todo_tags_tag ON todo_tags(tag);
-        CREATE INDEX IF NOT EXISTS idx_todo_history_todo ON todo_history(todo_id);
+        CREATE INDEX IF NOT EXISTS idx_audit_log_todo ON audit_log(todo_id);
     """)
     conn.commit()
     return conn
@@ -125,12 +125,12 @@ def add_todo(conn, title, priority='medium', due_date=None, note='', created_by=
     return todo_id
 
 
-def _log_change(conn, todo_id, field, old_value, new_value, changed_by=''):
+def _log_change(conn, todo_id, action, old_value, new_value, user=''):
     if str(old_value) != str(new_value):
         conn.execute(
-            "INSERT INTO todo_history (todo_id, field, old_value, new_value, changed_by) VALUES (?, ?, ?, ?, ?)",
-            (todo_id, field, str(old_value) if old_value is not None else '', 
-             str(new_value) if new_value is not None else '', changed_by))
+            "INSERT INTO audit_log (todo_id, action, old_value, new_value, user) VALUES (?, ?, ?, ?, ?)",
+            (todo_id, action, str(old_value) if old_value is not None else '', 
+             str(new_value) if new_value is not None else '', user))
 
 
 def edit_todo(conn, todo_id, title=None, priority=None, due_date=None, note=None, tags=None, changed_by=''):
@@ -140,21 +140,21 @@ def edit_todo(conn, todo_id, title=None, priority=None, due_date=None, note=None
     updates = []
     params = []
     if title is not None and title != old['title']:
-        _log_change(conn, todo_id, 'title', old['title'], title, changed_by)
+        _log_change(conn, todo_id, 'edit_title', old['title'], title, changed_by)
         updates.append("title = ?")
         params.append(title)
     if priority is not None and priority != old['priority']:
-        _log_change(conn, todo_id, 'priority', old['priority'], priority, changed_by)
+        _log_change(conn, todo_id, 'edit_priority', old['priority'], priority, changed_by)
         updates.append("priority = ?")
         params.append(priority)
     if due_date is not None:
         new_due = normalize_date(due_date) if due_date != '' else None
         if new_due != old['due_date']:
-            _log_change(conn, todo_id, 'due_date', old['due_date'], new_due, changed_by)
+            _log_change(conn, todo_id, 'edit_due_date', old['due_date'], new_due, changed_by)
             updates.append("due_date = ?")
             params.append(new_due)
     if note is not None and note != old['note']:
-        _log_change(conn, todo_id, 'note', old['note'], note, changed_by)
+        _log_change(conn, todo_id, 'edit_note', old['note'], note, changed_by)
         updates.append("note = ?")
         params.append(note)
     if updates:
@@ -165,7 +165,7 @@ def edit_todo(conn, todo_id, title=None, priority=None, due_date=None, note=None
         old_tags = sorted(get_todo_tags(conn, todo_id))
         new_tags = sorted(tags)
         if old_tags != new_tags:
-            _log_change(conn, todo_id, 'tags', ','.join(old_tags), ','.join(new_tags), changed_by)
+            _log_change(conn, todo_id, 'edit_tags', ','.join(old_tags), ','.join(new_tags), changed_by)
             conn.execute("DELETE FROM todo_tags WHERE todo_id = ?", (todo_id,))
             for tag in tags:
                 try:
@@ -178,7 +178,7 @@ def edit_todo(conn, todo_id, title=None, priority=None, due_date=None, note=None
 def mark_done(conn, todo_id, changed_by=''):
     old = get_todo(conn, todo_id)
     if old and old['status'] != 'done':
-        _log_change(conn, todo_id, 'status', 'pending', 'done', changed_by)
+        _log_change(conn, todo_id, 'mark_done', 'pending', 'done', changed_by)
     conn.execute("UPDATE todos SET status = 'done', completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                  (todo_id,))
     conn.commit()
@@ -186,7 +186,7 @@ def mark_done(conn, todo_id, changed_by=''):
 
 def get_history(conn, todo_id):
     return conn.execute(
-        "SELECT * FROM todo_history WHERE todo_id = ? ORDER BY changed_at ASC",
+        "SELECT * FROM audit_log WHERE todo_id = ? ORDER BY timestamp ASC",
         (todo_id,)).fetchall()
 
 

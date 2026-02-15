@@ -169,8 +169,8 @@ def cmd_history(args):
 
     print(f"📋 [{args.id}] {todo['title']} — 修改紀錄：")
     for h in history:
-        by = f"  (by {h['changed_by']})" if h['changed_by'] else ''
-        print(f"  {h['changed_at']}  {h['field']}: {h['old_value']} → {h['new_value']}{by}")
+        by = f" | {h['user']}" if h['user'] else ''
+        print(f"  {h['timestamp']} | {h['action']} | {h['old_value']} → {h['new_value']}{by}")
 
 
 def cmd_due(args):
