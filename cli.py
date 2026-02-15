@@ -4,6 +4,10 @@ import argparse
 import sys
 import os
 import getpass
+import json
+import urllib.request
+import urllib.parse
+import urllib.error
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from todotool import db
@@ -16,47 +20,86 @@ PRIORITY_ICON = {'high': '🔴', 'medium': '🟡', 'low': '🟢'}
 STATUS_ICON = {'pending': '📝', 'done': '✅'}
 
 
+def verify_lids_token(token):
+    """Verify token with LIDS API and return username if valid."""
+    lids_url = os.environ.get('LIDS_API_URL', '')
+    if not lids_url:
+        print("❌ LIDS_API_URL 環境變數未設定")
+        return None
+    
+    try:
+        # 準備 API 請求
+        url = f"{lids_url.rstrip('/')}/api/verify"
+        data = json.dumps({'token': token}).encode('utf-8')
+        req = urllib.request.Request(url, data=data)
+        req.add_header('Content-Type', 'application/json')
+        
+        with urllib.request.urlopen(req) as response:
+            result = json.loads(response.read().decode('utf-8'))
+            if result.get('valid', False):
+                return result.get('username', 'lids_user')
+            else:
+                return None
+    except (urllib.error.URLError, json.JSONDecodeError, Exception) as e:
+        print(f"❌ LIDS 驗證錯誤: {e}")
+        return None
+
+
 def require_auth(conn, args=None):
-    """Check if any user exists, if so require login. Supports LIDS."""
+    """Check if any user exists, if so require login. Supports local and LIDS auth modes."""
     global SESSION_USER
     if SESSION_USER:
         return True
 
-    # Try LIDS auth first
-    try:
-        from hurricanesoft_auth.wrapper import try_lids_auth
-        lids_user = try_lids_auth(args)
-        if lids_user:
-            SESSION_USER = lids_user
+    auth_mode = getattr(args, 'auth_mode', 'local')
+    
+    if auth_mode == 'lids':
+        # LIDS OAuth 認證模式
+        token = getattr(args, 'token', None) or os.environ.get('LIDS_TOKEN', '')
+        if not token:
+            try:
+                print("🔐 LIDS 認證")
+                token = getpass.getpass("LIDS Token: ")
+            except (EOFError, OSError):
+                print("❌ 需要 LIDS token（用 --token 或環境變數 LIDS_TOKEN）")
+                return False
+        
+        username = verify_lids_token(token)
+        if username:
+            SESSION_USER = username
+            print(f"✅ LIDS 登入成功, {username}")
             return True
-    except ImportError:
-        pass
-
-    username = getattr(args, 'user', None) or os.environ.get('TODO_USER', '')
-    password = getattr(args, 'password', None) or os.environ.get('TODO_PASSWORD', '')
-    users = conn.execute("SELECT COUNT(*) as c FROM users").fetchone()['c']
-    if users == 0:
-        return True
-    if username and password:
+        else:
+            print("❌ LIDS token 無效")
+            return False
+    
+    else:
+        # local 認證模式（原本的邏輯）
+        username = getattr(args, 'user', None) or os.environ.get('TODO_USER', '')
+        password = getattr(args, 'password', None) or os.environ.get('TODO_PASSWORD', '')
+        users = conn.execute("SELECT COUNT(*) as c FROM users").fetchone()['c']
+        if users == 0:
+            return True
+        if username and password:
+            if db.verify_user(conn, username, password):
+                SESSION_USER = username
+                return True
+            print("❌ 帳號或密碼錯誤")
+            return False
+        try:
+            print("🔐 請先登入")
+            username = input("帳號: ")
+            password = getpass.getpass("密碼: ")
+        except (EOFError, OSError):
+            print("❌ 需要帳號密碼（用 --user/--password 或環境變數 TODO_USER/TODO_PASSWORD）")
+            return False
         if db.verify_user(conn, username, password):
             SESSION_USER = username
+            print(f"✅ 歡迎, {username}")
             return True
-        print("❌ 帳號或密碼錯誤")
-        return False
-    try:
-        print("🔐 請先登入")
-        username = input("帳號: ")
-        password = getpass.getpass("密碼: ")
-    except (EOFError, OSError):
-        print("❌ 需要帳號密碼（用 --user/--password 或環境變數 TODO_USER/TODO_PASSWORD）")
-        return False
-    if db.verify_user(conn, username, password):
-        SESSION_USER = username
-        print(f"✅ 歡迎, {username}")
-        return True
-    else:
-        print("❌ 帳號或密碼錯誤")
-        return False
+        else:
+            print("❌ 帳號或密碼錯誤")
+            return False
 
 
 def cmd_init(args):
@@ -213,9 +256,13 @@ def cmd_tag(args):
 def main():
     parser = argparse.ArgumentParser(prog='todotool', description='HurricaneSoft 待辦事項管理工具')
     parser.add_argument('--version', action='version', version=f'todotool v{__version__}')
-    parser.add_argument('--user', help='登入帳號')
-    parser.add_argument('--password', help='登入密碼')
-    parser.add_argument('--lids', action='store_true', help='使用 LIDS 認證')
+    parser.add_argument('--auth-mode', choices=['local', 'lids'], default='local', 
+                       help='認證模式：local (本地 SQLite) 或 lids (LIDS OAuth)')
+    parser.add_argument('--user', help='登入帳號 (local 模式)')
+    parser.add_argument('--password', help='登入密碼 (local 模式)')
+    parser.add_argument('--token', help='LIDS token (lids 模式)')
+    # 保留舊的 --lids 參數以向後相容
+    parser.add_argument('--lids', action='store_true', help='使用 LIDS 認證（等同 --auth-mode lids）')
 
     sub = parser.add_subparsers(dest='command')
 
@@ -266,6 +313,11 @@ def main():
     p.add_argument('action', choices=['list'], help='動作')
 
     args = parser.parse_args()
+    
+    # 向後相容：--lids 設定 auth_mode 為 lids
+    if args.lids:
+        args.auth_mode = 'lids'
+    
     if not args.command:
         parser.print_help()
         return
