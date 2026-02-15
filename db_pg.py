@@ -1,4 +1,7 @@
-"""PostgreSQL database layer for TodoTool."""
+"""PostgreSQL database layer for TodoTool.
+
+Fixed: PostgreSQL compatibility - no PRAGMA, no executescript, proper TIMESTAMP usage.
+"""
 import os
 import hashlib
 import secrets
